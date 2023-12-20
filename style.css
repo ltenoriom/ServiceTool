@@ -1,0 +1,90 @@
+ h1 {
+     color: #00ada4;
+ }
+
+ .styled-table {
+     border-collapse: collapse;
+     margin: 25px 0;
+     font-size: 0.9em;
+     font-family: sans-serif;
+     min-width: 400px;
+     box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+     text-align: center;
+ }
+
+ .styled-table thead tr {
+     background-color: #009879;
+     color: #ffffff;
+     text-align: center;
+ }
+
+ .styled-table th,
+ .styled-table td {
+     padding: 2px 5px;
+     text-align: center;
+ }
+
+ styled-table tbody tr {
+     border-bottom: 1px solid #dddddd;
+ }
+
+ .styled-table tbody tr:nth-of-type(even) {
+     background-color: #f3f3f3;
+     text-align: center;
+ }
+
+ .styled-table tbody tr:last-of-type {
+     border-bottom: 4px solid #00ada4;
+ }
+
+ .styled-table tbody tr.active-row {
+     font-weight: bold;
+     color: #00ada4;
+ }
+
+ /* Set additional styling options for the columns */
+ .column {
+     float: left;
+ }
+
+ /* Set width length for the left, right and middle columns */
+ .left {
+     width: 20%;
+ }
+
+ .middle {
+     width: 30%;
+ }
+
+ .right {
+     width: 50%;
+ }
+
+ .row:after {
+     content: "";
+     display: table;
+     clear: both;
+ }
+
+ body {
+    font-family: sans-serif;
+}
+
+.line{ /* Describes only positioning behaviour */
+    display: block; /* Not important, but helpful in this case */
+    clear: both;    /* Not important, but helpful in this case */
+}
+
+.line__figure{ /* Describes only positioning behaviour */
+    float:left;
+}
+
+.figure{ /* Describes only view representation. */
+    display: block; /* Not important, but helpful in this case */
+}
+
+.figure__image{
+    background: lightgray;
+    width: 400px;
+    height: 300px;
+}

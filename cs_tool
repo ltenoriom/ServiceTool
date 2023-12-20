@@ -1,0 +1,332 @@
+#!/usr/bin/python3
+# This script is the CLI frontend
+
+import argparse
+import logging
+import sys
+from getpass import getpass
+
+from JIRA import fetch_jira_status, defects
+from Management import reports, actions
+from Misc.config import Config
+from Misc import tools
+from Salesforce import create_sf_session, case, case_comment, cve, satisfaction, session
+from CVE import fetch
+from DASH import dashboard
+from AuthManagement.salesforce import SalesforceAuth
+from AuthManagement.okta import OktaAuth
+from JIRA import credentials
+
+__version__ = '0.1'
+
+# Initiate the parser
+parser = argparse.ArgumentParser(description='cveTool: CVE automation tool.')
+parser.add_argument('-v', '--version', action='version',
+                    version='%(prog)s ' + str(__version__), help='show program version')
+subparsers = parser.add_subparsers(help='Commands available', dest='command')
+
+# Enable or disable test module
+parser.add_argument(
+    '-t', '--test', action='store_true', dest='test', help='Use Test Instance(UAT)')
+
+# CSV
+parser_csv = subparsers.add_parser(
+    'csv', formatter_class=argparse.ArgumentDefaultsHelpFormatter, help='Export Cisco Cases to CSV.')
+parser_csv.add_argument('module', choices=['jira', 'sf'])
+parser_csv.add_argument(
+    '-o', '--output', default='./reports/CVE_Data.csv', help='Output file path.')
+
+# Salesforce
+parser_sf = subparsers.add_parser('sf', help='Salesforce commands.')
+sf_subparsers = parser_sf.add_subparsers(help='Salesforce automation commands', dest='sf_command')
+parser_sf_session = sf_subparsers.add_parser('session', help='Create SF session.')
+parser_sf_list = sf_subparsers.add_parser('ls', help='List all CVE cases assigned to my user.')
+
+parser_sf_inspect = sf_subparsers.add_parser('inspect', help='Inspect Salesforce case.')
+parser_sf_inspect.add_argument('number', type=str, help='Case Number.')
+
+parser_sf_jiras = sf_subparsers.add_parser('jiras', help='Get possible Jiras for a Salesforce case.')
+parser_sf_jiras.add_argument('number', type=str, help='Case Number.')
+
+parser_sf_associate = sf_subparsers.add_parser('associate', help='Run topbox automation.')
+parser_sf_associate.add_argument('number', type=str, help='Case Number.')
+parser_sf_associate.add_argument('defect', type=str, help='Defect Number.')
+
+parser_sf_assign = sf_subparsers.add_parser('assign', help='Reassign a case to a user.')
+parser_sf_assign.add_argument('number', type=str, help='Case Number.')
+parser_sf_assign.add_argument('user', type=str, help='User to assign case to. (Alias)')
+
+parser_sf_topbox = sf_subparsers.add_parser('topbox', help='Associate JIRA with a Salesforce case.')
+parser_sf_topbox.add_argument('option', type=str, help='all/cr')
+
+parser_sf_resolution = sf_subparsers.add_parser('resolution', help='Set Resolution summary and plan to.')
+parser_sf_resolution.add_argument('number', type=str, help='Case Number.')
+parser_sf_resolution.add_argument('text', type=str, nargs='+', help='Text.')
+
+parser_sf_comment = sf_subparsers.add_parser('comment', help='Post comment.')
+parser_sf_get_comments = sf_subparsers.add_parser('get_comments', help='Get comments.')
+
+parser_sf_cis_cve_assign = sf_subparsers.add_parser('cis_cve_assign', help='Get cis_cve_assign.')
+parser_sf_cis_cve_process = sf_subparsers.add_parser('cis_cve_process', help='Get cis_cve_process.')
+
+parser_sf_report = sf_subparsers.add_parser('report', help='Get report.')
+
+parser_sf_case_update = sf_subparsers.add_parser('case_update', help='Case Update.')
+parser_sf_case_update.add_argument('number', type=str, help='Case NUmber')
+parser_sf_case_update.add_argument('text', type=str, help='Comment to update case')
+parser_sf_case_info = sf_subparsers.add_parser('case_info', help='Get Case Info.')
+parser_sf_case_info.add_argument('number', type=str, help='Case Number.')
+parser_sf_cases_cse = sf_subparsers.add_parser('cases_cse', help='Get Cases per CSE.')
+parser_sf_cases_cse.add_argument('alias', type=str, help='Alias desired.')
+parser_sf_cases_cse.add_argument('type', type=str, help='Type of Cases to get.(all/open/closed/cve)')
+parser_sf_comment.add_argument('number', type=str, help='Case Number.')
+parser_sf_get_comments.add_argument('number', type=str, help='Case Number.')
+parser_sf_comment.add_argument('type', type=str, help='all/internal')
+parser_sf_comment.add_argument('text', type=str, nargs='+', help='Text.')
+parser_sf_set_status = sf_subparsers.add_parser(
+    'set_status', help='Case Status Update.')
+parser_sf_set_status.add_argument('number', type=str, help='Case Number')
+parser_sf_set_status.add_argument(
+    'new_status', type=str, help='Case New Status')
+parser_sf_get_workload = sf_subparsers.add_parser(
+    'get_workload', help='Get Workload for all the team.')
+parser_sf_get_accounts = sf_subparsers.add_parser(
+    'get_accounts', help='Get Accounts Number.')
+parser_sf_call_dash = sf_subparsers.add_parser(
+    'call_dash', help='Call dash testing.')
+
+# JIRA
+parser_jira = subparsers.add_parser('jira', help='Jira commands.')
+jira_subparsers = parser_jira.add_subparsers(
+    help='Jira automation commands', dest='jira_command')
+parser_jira_search = jira_subparsers.add_parser('search', help='Search CVE.')
+parser_jira_search.add_argument('cve', type=str, help='CVE Number.')
+parser_jira_bulk_search = jira_subparsers.add_parser(
+    'bulk_search', help='Search BULK CVES.')
+parser_jira_bulk_search.add_argument('filename', type=str, help='Csv filename')
+parser_jira_bulk_search.add_argument(
+    'project', type=str, help='add project you want to check')
+parser_jira_clone = jira_subparsers.add_parser(
+    'clone', help='Clone issue into LINCCM.')
+parser_jira_clone.add_argument('defect', type=str, help='Defect Number.')
+parser_jira_clone.add_argument(
+    '--account', type=str, help='Premium account (cisco,juniper,...)', default='cisco')
+parser_jira_inspect = jira_subparsers.add_parser(
+    'inspect', help='Inspect Defect.')
+parser_jira_inspect.add_argument('defect', type=str, help='Defect Number.')
+
+# Management
+parser_mg = subparsers.add_parser('mg', help='Management Commands')
+mg_subparsers = parser_mg.add_subparsers(help='Managements Functions', dest='mg_command')
+
+
+parser_mg_cis_cve_update = mg_subparsers.add_parser('cis_cve_update', help='CVE Case update/close/update.')
+parser_mg_cis_cve_update.add_argument('text', type=str, help='cse/all')
+
+parser_mg_users = mg_subparsers.add_parser('users', help='Share the users information based on emails')
+parser_mg_users.add_argument('filename', type=str, help='filename with users')
+
+parser_mg_cso_orgchart = mg_subparsers.add_parser('cso_orgchart', help='Get the CSO Orghart.')
+parser_mg_cso_orgchart.add_argument('option', type=str, help='all/manager')
+
+parser_mg_satisfaction = mg_subparsers.add_parser('satisfaction', help='Get satisfaction.')
+parser_mg_satisfaction.add_argument('option', type=str, help='Select eng/all')
+parser_mg_satisfaction.add_argument('days', type=str, help='days for analysis')
+
+parser_mg_premium = mg_subparsers.add_parser('premium', help='Get premium accounts information.')
+parser_mg_premium.add_argument('option', type=str, help='single or multiple')
+parser_mg_premium.add_argument('structure', type=str, help='second option')
+
+parser_mg_customer = mg_subparsers.add_parser('customer', help='Get satisfaction.')
+parser_mg_customer.add_argument('license', type=str, help='License Number or list of licenses')
+parser_mg_customer.add_argument('myselect', type=str, help='select type of report')
+##parser_mg_customer.add_argument('-l','--list', action='append', help='<Required> Set flag', required=True)
+
+parser_mg_nps = mg_subparsers.add_parser('nps', help='Test Salesforce case.')
+parser_mg_perf = mg_subparsers.add_parser('perf', help='Create a Performance Report or the people selected')
+parser_mg_perf.add_argument('option', type=str, help='[cr/na//all/man:<manager_alias>]')
+parser_mg_perf.add_argument('time', type=str, help='THIS_YEAR,THIS_MONTH,LAST_MONTH....,LAST_N_MONTHS:<N>')
+
+parser_mg_capacity = mg_subparsers.add_parser('capacity', help='Create a Capacity Report or the people selected')
+parser_mg_capacity.add_argument('option', type=str, help='[cr/na//all/man:<manager_alias>]')
+
+parser_mg_misc_info = mg_subparsers.add_parser('misc', help='Create a report for complexity and product')
+parser_mg_misc_info.add_argument('option', type=str, help='[cr/na//all/man:<manager_alias>]')
+
+
+parser_mg_create_presentation= mg_subparsers.add_parser('create_presentation', help='create the staft presentation')
+parser_mg_create_presentation.add_argument('option', type=str, help='[lic/linux]')
+
+"""use this one for testing purposes """
+parser_mg_test = mg_subparsers.add_parser('test', help='Test Salesforce case.')
+
+
+# CVE
+parser_cve = subparsers.add_parser('cve', help='CVE commands.')
+cve_subparsers = parser_cve.add_subparsers(help='CVE information fetch commands', dest='cve_command')
+parser_cve_srtool = cve_subparsers.add_parser('srtool', help='SRTool Fetch')
+parser_cve_srtool.add_argument('number', type=str, help='CVE number')
+parser_cve_nvd = cve_subparsers.add_parser('nvd', help='NVD Fetch')
+parser_cve_nvd.add_argument('number', type=str, help='CVE number')
+
+# Configuration
+logging.basicConfig(format='%(levelname)s: %(message)s')
+
+
+def sf_session(config):
+    sf = SalesforceAuth.get_instance()
+    if not sf.login():
+        print("Okta Login")
+        okta = OktaAuth.get_instance()
+        USER, PASSWORD = credentials.check(config)
+        okta.login(USER,PASSWORD)
+        if not sf.login(okta):
+            sys.exit(-1)
+
+    sf_ins = sf.get_sf_instance()
+    userid = sf.get_user_id()
+
+    return sf_ins, userid
+
+
+def main(args, config):
+    if args.command == 'csv':
+        if args.module == 'jira':
+            fetch_jira_status.main(args.output)
+        elif args.module == 'sf':
+            sf_ins, userid = sf_session(config)
+            cve.fetch_csv(sf_ins, args.output)
+
+    elif args.command == 'sf' and args.sf_command == 'session':
+        sf_session(config)
+
+    elif args.command == 'sf':
+        sf_ins, userid = sf_session(config)
+        if args.sf_command == 'ls':
+            case.list_case(sf_ins, userid)
+        elif args.sf_command == 'call_dash':
+            dashboard.init(sf_ins,config)
+        elif args.sf_command == 'inspect':
+            case.fetch(sf_ins, args.number)
+        elif args.sf_command == 'jiras':
+            case.jiras(sf_ins, args.number, config)
+        elif args.sf_command == 'associate':
+            case.associate(sf_ins, args.number, args.defect, config)
+        elif args.sf_command == 'assign':
+            case.sf_re_assign_case(sf_ins, args.number, args.user)
+        elif args.sf_command == 'resolution':
+            case.sf_set_resolution(sf_ins, args.number, args.text)
+        elif args.sf_command == 'case_info':
+            case.sf_case_get_info(sf_ins, args.number, config)
+        elif args.sf_command == 'topbox':
+            if args.option == 'all':
+                case.sf_topbox(sf_ins,config)
+            else: 
+                case.sf_topbox_costa_rica_team(sf_ins)
+        elif args.sf_command == 'comment':
+            case_comment.post_comment(sf_ins, args.number, args.text, args.type)
+        elif args.sf_command == 'get_comments':
+                case_comment.get_comments(sf_ins, args.number)
+        elif args.sf_command == 'case_update':
+            case.sf_case_update(sf_ins, args.number, args.text)
+        elif args.sf_command == 'set_status':
+            case.sf_set_status_case(sf_ins, args.number, args.new_status)
+        elif args.sf_command == 'cases_csxe':
+            case.cases_per_cse(sf_ins, args.alias, args.type, config)
+        elif args.sf_command == 'report':
+            case.sf_case_get_report(sf_ins, '00O1M000007rnDEUAY')
+        elif args.sf_command == 'cis_cve_assign':
+            actions.cis_cve_assign(sf_ins, 'ezunigam', config)
+        elif args.sf_command == 'get_workload':
+            case.sf_get_workload(sf_ins, 30)
+        elif args.sf_command == 'get_accounts':
+            case.sf_get_accounts(sf_ins, 60)
+        elif args.sf_command == 'cis_cve_process':
+            actions.cis_cve_process(sf_ins, config)
+        else:
+            parser_sf.print_help()
+
+    elif args.command == 'jira':
+        if args.jira_command == 'inspect':
+            sf_ins, userid = sf_session(config)
+            defects.inspect(args.defect, config)
+        elif args.jira_command == 'search':
+            defects.cve(args.cve, config)
+        elif args.jira_command == 'bulk_search':
+            defects.bulk_search(args.filename, args.project, config)
+        elif args.jira_command == 'clone':
+            sf_ins, userid = sf_session(config)
+            defects.clone(sf_ins=sf_ins, defect_id=args.defect, project='LINCCM',
+                          case_id=None, account=args.account, wrl_target_v=None, config=config)
+        else:
+            parser_jira.print_help()
+
+    elif args.command == 'mg':
+        if args.mg_command == 'cis_cve_update':
+            sf_ins, userid = sf_session(config)
+            if args.text == 'closed':
+                reports.sf_cve_closed_cases(sf_ins, '00516000007GiUaAAK', 'Cisco Systems', 20)  # 8 days report
+            else:
+                reports.sf_cve_update(sf_ins, args.text, '00516000007GiUaAAK', 'Cisco Systems', config)
+        elif args.mg_command == 'customer':
+            sf_ins, userid = sf_session(config)
+            if args.myselect == 'info':
+                satisfaction.customer_information(sf_ins,args.license)
+            elif args.myselect == 'report':
+                satisfaction.customer_report(sf_ins,args.license)
+            else:
+                print('no valid option: select info/report')
+        elif args.mg_command == 'test':
+            sf_ins, userid = sf_session(config)
+            satisfaction.reflektive(sf_ins)
+        elif args.mg_command == 'users':
+            sf_ins, userid = sf_session(config)
+            satisfaction.users(sf_ins, args.filename)
+        elif args.mg_command == 'premium': 
+            sf_ins, userid = sf_session(config)
+            satisfaction.sf_get_premium_list(sf_ins, args.option)
+        elif args.mg_command == 'satisfaction':
+            sf_ins, userid = sf_session(config)
+            satisfaction.sf_review_performance(sf_ins, args.option,args.days)
+        elif args.mg_command == 'cso_orgchart':
+            sf_ins, userid = sf_session(config)
+            print('calling org chart')
+            satisfaction.sf_org_chart(sf_ins, args.option)
+        elif args.mg_command == 'nps':
+            sf_ins, userid = sf_session(config)
+            satisfaction.sf_nps(sf_ins)
+        elif args.mg_command == 'perf':
+            sf_ins, userid = sf_session(config)
+            satisfaction.sf_perf(sf_ins, args.option,args.time)
+        elif args.mg_command == 'capacity':
+            sf_ins, userid = sf_session(config)
+            satisfaction.sf_capacity(sf_ins, args.option)
+        elif args.mg_command == 'misc':
+            sf_ins, userid = sf_session(config)
+            satisfaction.sf_misc_information(sf_ins, args.option)
+        elif args.mg_command == 'create_presentation':
+            sf_ins, userid = sf_session(config)
+            satisfaction.create_presentation(sf_ins,args.option)
+        else:
+            parser_mg.print_help()
+
+    elif args.command == 'cve':
+        if args.cve_command == 'srtool':
+            fetch.srtool(args.number)
+        elif args.cve_command == 'nvd':
+            fetch.nvd(args.number)
+        else:
+            logging.error('No CVE command specified.')
+            parser_cve.print_help()
+            return -1
+
+
+if __name__ == '__main__':
+    cli_args = parser.parse_args()
+    # Pass the running type to the configs constructor
+    conf = Config(cli_args.test)
+    if not conf.load_file('conf/config.yaml'):
+        print('Failed to load configuration file')
+        sys.exit(-1)
+
+    main(cli_args, conf)
