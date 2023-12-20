@@ -1,0 +1,7 @@
+sf_url: windriver.my.salesforce.com
+test_sf_url: windriver--uat.my.salesforce.com
+request_token: https://login.salesforce.com/services/oauth2/token
+test_request_token: https://test.salesforce.com/services/oauth2/token
+sf_credentials_file: sf_creedentials.json
+test_sf_credentials_file: test_sf_credentials.json
+jira_credentials_file: credentials.json
